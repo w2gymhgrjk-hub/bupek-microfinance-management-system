@@ -1,19 +1,14 @@
-/**
- * Repayment Management Routes (Placeholder)
- */
-
 import { Router } from 'express';
-import { authMiddleware, requirePermission } from '../middleware/auth';
-import { sendSuccess } from '../utils/responses';
+import { authenticateToken } from '../middleware/auth';
+import * as repaymentController from '../controllers/repaymentController';
 
 const router = Router();
-router.use(authMiddleware);
 
-/**
- * Placeholder routes for repayments
- */
-router.get('/', requirePermission('VIEW_REPAYMENTS'), (req, res) => {
-  sendSuccess(res, 200, 'Repayments endpoint - to be implemented');
-});
+router.use(authenticateToken);
+
+router.post('/', repaymentController.recordRepayment);
+router.get('/:id', repaymentController.getRepayment);
+router.get('/loan/:loanId', repaymentController.getRepaymentHistory);
+router.get('/collection/summary', repaymentController.getDailyCollectionSummary);
 
 export default router;

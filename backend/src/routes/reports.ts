@@ -1,19 +1,15 @@
-/**
- * Reports Routes (Placeholder)
- */
-
 import { Router } from 'express';
-import { authMiddleware, requirePermission } from '../middleware/auth';
-import { sendSuccess } from '../utils/responses';
+import { authenticateToken } from '../middleware/auth';
+import * as reportController from '../controllers/reportController';
 
 const router = Router();
-router.use(authMiddleware);
 
-/**
- * Placeholder routes for reports
- */
-router.get('/', requirePermission('VIEW_REPORTS'), (req, res) => {
-  sendSuccess(res, 200, 'Reports endpoint - to be implemented');
-});
+router.use(authenticateToken);
+
+router.get('/par', reportController.getPARReport);
+router.get('/daily-collection', reportController.getDailyCollectionReport);
+router.get('/branch-performance', reportController.getBranchPerformanceReport);
+router.get('/loan-officer-performance', reportController.getLoanOfficerPerformanceReport);
+router.get('/recovery', reportController.getRecoveryReport);
 
 export default router;

@@ -1,19 +1,16 @@
-/**
- * Collections Management Routes (Placeholder)
- */
-
 import { Router } from 'express';
-import { authMiddleware, requirePermission } from '../middleware/auth';
-import { sendSuccess } from '../utils/responses';
+import { authenticateToken } from '../middleware/auth';
+import * as collectionController from '../controllers/collectionController';
 
 const router = Router();
-router.use(authMiddleware);
 
-/**
- * Placeholder routes for collections
- */
-router.get('/', requirePermission('VIEW_OVERDUE'), (req, res) => {
-  sendSuccess(res, 200, 'Collections endpoint - to be implemented');
-});
+router.use(authenticateToken);
+
+router.post('/identify-overdue', collectionController.identifyOverdueLoans);
+router.get('/overdue-loans', collectionController.getOverdueLoans);
+router.post('/create', collectionController.createCollection);
+router.post('/:collectionId/follow-up-notes', collectionController.addFollowUpNote);
+router.get('/:collectionId/follow-up-notes', collectionController.getFollowUpNotes);
+router.put('/follow-up-notes/:noteId/promise-status', collectionController.updatePromiseToPayStatus);
 
 export default router;

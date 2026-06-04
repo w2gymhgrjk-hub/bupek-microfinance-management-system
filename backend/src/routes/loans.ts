@@ -1,19 +1,17 @@
-/**
- * Loan Management Routes (Placeholder)
- */
-
 import { Router } from 'express';
-import { authMiddleware, requirePermission } from '../middleware/auth';
-import { sendSuccess } from '../utils/responses';
+import { authenticateToken } from '../middleware/auth';
+import * as loanController from '../controllers/loanController';
 
 const router = Router();
-router.use(authMiddleware);
 
-/**
- * Placeholder routes for loans
- */
-router.get('/', requirePermission('VIEW_LOANS'), (req, res) => {
-  sendSuccess(res, 200, 'Loans endpoint - to be implemented');
-});
+router.use(authenticateToken);
+
+router.post('/', loanController.createLoan);
+router.get('/', loanController.getAllLoans);
+router.get('/:id', loanController.getLoan);
+router.post('/:id/approve', loanController.approveLoan);
+router.post('/:id/disburse', loanController.disburseLoan);
+router.get('/:loanId/schedule', loanController.getLoanSchedule);
+router.get('/borrower/:borrowerId', loanController.getLoansByBorrower);
 
 export default router;
