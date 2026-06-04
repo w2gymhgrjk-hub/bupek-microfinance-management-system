@@ -1,6 +1,63 @@
 -- BUPEK Microfinance Management System - PostgreSQL Schema
--- Version: 1.0.0
+-- Version: 2.0.0 - Complete Implementation
 -- Created: 2026-06-04
+
+-- ============================================
+-- EXTENSIONS
+-- ============================================
+
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+-- ============================================
+-- ENUMS
+-- ============================================
+
+CREATE TYPE user_role AS ENUM (
+  'CEO_ADMIN',
+  'OPERATIONS_MANAGER',
+  'BRANCH_MANAGER',
+  'LOAN_OFFICER',
+  'COLLECTION_OFFICER',
+  'ACCOUNTANT',
+  'VIEWER'
+);
+
+CREATE TYPE loan_status AS ENUM (
+  'PENDING',
+  'APPROVED',
+  'DISBURSED',
+  'ACTIVE',
+  'COMPLETED',
+  'DEFAULTED',
+  'WRITTEN_OFF'
+);
+
+CREATE TYPE repayment_status AS ENUM (
+  'PENDING',
+  'PARTIAL_PAID',
+  'PAID',
+  'OVERDUE',
+  'WAIVED'
+);
+
+CREATE TYPE collection_status AS ENUM (
+  'PENDING',
+  'IN_PROGRESS',
+  'RESOLVED',
+  'CLOSED'
+);
+
+CREATE TYPE document_type AS ENUM (
+  'NATIONAL_ID',
+  'PASSPORT',
+  'DRIVER_LICENSE',
+  'BUSINESS_LICENSE',
+  'PROOF_OF_RESIDENCE',
+  'BANK_STATEMENT',
+  'PAYSLIP',
+  'CONTRACT'
+);
 
 -- ============================================
 -- ROLES AND PERMISSIONS
@@ -62,7 +119,7 @@ CREATE INDEX idx_users_is_active ON users(is_active);
 
 CREATE TABLE branches (
   id SERIAL PRIMARY KEY,
-  name VARCHAR(100) NOT NULL,
+  name VARCHAR(100) NOT NULL UNIQUE,
   code VARCHAR(20) UNIQUE NOT NULL,
   address TEXT,
   city VARCHAR(50),
@@ -80,6 +137,10 @@ CREATE TABLE branches (
 CREATE INDEX idx_branches_code ON branches(code);
 CREATE INDEX idx_branches_is_active ON branches(is_active);
 
+-- Add branch_id FK to users
+ALTER TABLE users ADD CONSTRAINT fk_users_branch_id 
+  FOREIGN KEY (branch_id) REFERENCES branches(id);
+
 CREATE TABLE staff_branch_assignments (
   id SERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -88,7 +149,7 @@ CREATE TABLE staff_branch_assignments (
   removed_date TIMESTAMP,
   is_current BOOLEAN DEFAULT TRUE,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE(user_id, branch_id, is_current)
+  UNIQUE(user_id, branch_id)
 );
 
 CREATE INDEX idx_staff_branch_user ON staff_branch_assignments(user_id);
@@ -119,6 +180,8 @@ CREATE TABLE borrowers (
   photo_url VARCHAR(255),
   branch_id INTEGER NOT NULL REFERENCES branches(id),
   loan_officer_id INTEGER REFERENCES users(id),
+  kyc_verified BOOLEAN DEFAULT FALSE,
+  kyc_verified_at TIMESTAMP,
   is_active BOOLEAN DEFAULT TRUE,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -143,6 +206,7 @@ CREATE TABLE guarantors (
   relationship VARCHAR(50),
   address TEXT,
   occupation VARCHAR(100),
+  is_primary BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -197,6 +261,9 @@ CREATE TABLE loans (
   status VARCHAR(20) DEFAULT 'PENDING',
   loan_purpose VARCHAR(255),
   repayment_frequency VARCHAR(20),
+  total_interest DECIMAL(15, 2) DEFAULT 0,
+  total_charges DECIMAL(15, 2) DEFAULT 0,
+  total_amount_due DECIMAL(15, 2) DEFAULT 0,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   created_by INTEGER REFERENCES users(id),
@@ -214,6 +281,7 @@ CREATE TABLE loan_appraisals (
   loan_id INTEGER NOT NULL UNIQUE REFERENCES loans(id) ON DELETE CASCADE,
   appraisal_date DATE,
   appraised_by INTEGER REFERENCES users(id),
+  appraisal_amount DECIMAL(15, 2),
   recommendation VARCHAR(50),
   comments TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -260,6 +328,9 @@ CREATE TABLE loan_schedules (
   total_amount DECIMAL(15, 2),
   balance_after_payment DECIMAL(15, 2),
   is_paid BOOLEAN DEFAULT FALSE,
+  paid_date DATE,
+  paid_amount DECIMAL(15, 2) DEFAULT 0,
+  status VARCHAR(20) DEFAULT 'PENDING',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(loan_id, schedule_number)
 );
@@ -275,6 +346,8 @@ CREATE TABLE loan_charges (
   charge_amount DECIMAL(15, 2),
   charge_percentage DECIMAL(5, 2),
   description TEXT,
+  is_applied BOOLEAN DEFAULT FALSE,
+  applied_date TIMESTAMP,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -290,15 +363,18 @@ CREATE TABLE repayments (
   loan_id INTEGER NOT NULL REFERENCES loans(id),
   loan_schedule_id INTEGER REFERENCES loan_schedules(id),
   repayment_date DATE NOT NULL,
-  amount PAID DECIMAL(15, 2) NOT NULL,
+  amount_paid DECIMAL(15, 2) NOT NULL,
   principal_paid DECIMAL(15, 2),
   interest_paid DECIMAL(15, 2),
   charges_paid DECIMAL(15, 2),
   balance_after_payment DECIMAL(15, 2),
   payment_method VARCHAR(50),
   reference_number VARCHAR(100),
-  created_by INTEGER REFERENCES users(id),
+  collection_officer_id INTEGER REFERENCES users(id),
+  status VARCHAR(20) DEFAULT 'PAID',
+  receipt_number VARCHAR(50) UNIQUE,
   receipt_generated BOOLEAN DEFAULT FALSE,
+  created_by INTEGER REFERENCES users(id),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -306,6 +382,7 @@ CREATE TABLE repayments (
 CREATE INDEX idx_repayments_loan_id ON repayments(loan_id);
 CREATE INDEX idx_repayments_repayment_date ON repayments(repayment_date);
 CREATE INDEX idx_repayments_repayment_number ON repayments(repayment_number);
+CREATE INDEX idx_repayments_receipt_number ON repayments(receipt_number);
 
 CREATE TABLE repayment_receipts (
   id SERIAL PRIMARY KEY,
@@ -326,18 +403,51 @@ CREATE INDEX idx_repayment_receipts_repayment_id ON repayment_receipts(repayment
 CREATE TABLE collections (
   id SERIAL PRIMARY KEY,
   loan_id INTEGER NOT NULL REFERENCES loans(id),
+  borrower_id INTEGER NOT NULL REFERENCES borrowers(id),
   collection_date DATE NOT NULL,
   amount_collected DECIMAL(15, 2),
+  outstanding_amount DECIMAL(15, 2),
   collection_officer_id INTEGER REFERENCES users(id),
   collection_method VARCHAR(50),
   notes TEXT,
+  status VARCHAR(20) DEFAULT 'PENDING',
+  days_overdue INTEGER DEFAULT 0,
+  days_in_arrears INTEGER DEFAULT 0,
+  recovery_amount DECIMAL(15, 2) DEFAULT 0,
+  recovery_date DATE,
+  last_follow_up_date DATE,
+  next_follow_up_date DATE,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX idx_collections_loan_id ON collections(loan_id);
+CREATE INDEX idx_collections_borrower_id ON collections(borrower_id);
 CREATE INDEX idx_collections_collection_date ON collections(collection_date);
 CREATE INDEX idx_collections_collection_officer_id ON collections(collection_officer_id);
+CREATE INDEX idx_collections_status ON collections(status);
+
+CREATE TABLE follow_up_notes (
+  id SERIAL PRIMARY KEY,
+  collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+  loan_id INTEGER NOT NULL REFERENCES loans(id),
+  collection_officer_id INTEGER REFERENCES users(id),
+  follow_up_date DATE,
+  promise_to_pay_date DATE,
+  amount_promised DECIMAL(15, 2),
+  is_promise_kept BOOLEAN,
+  notes TEXT,
+  note_type VARCHAR(50),
+  follow_up_status VARCHAR(50),
+  recovery_amount DECIMAL(15, 2),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_follow_up_notes_loan_id ON follow_up_notes(loan_id);
+CREATE INDEX idx_follow_up_notes_collection_id ON follow_up_notes(collection_id);
+CREATE INDEX idx_follow_up_notes_collection_officer_id ON follow_up_notes(collection_officer_id);
+CREATE INDEX idx_follow_up_notes_follow_up_date ON follow_up_notes(follow_up_date);
 
 CREATE TABLE overdue_loans (
   id SERIAL PRIMARY KEY,
@@ -354,23 +464,6 @@ CREATE TABLE overdue_loans (
 CREATE INDEX idx_overdue_loans_loan_id ON overdue_loans(loan_id);
 CREATE INDEX idx_overdue_loans_days_overdue ON overdue_loans(days_overdue);
 CREATE INDEX idx_overdue_loans_status ON overdue_loans(status);
-
-CREATE TABLE follow_up_notes (
-  id SERIAL PRIMARY KEY,
-  loan_id INTEGER NOT NULL REFERENCES loans(id),
-  collection_officer_id INTEGER REFERENCES users(id),
-  follow_up_date DATE,
-  promise_to_pay_date DATE,
-  notes TEXT,
-  follow_up_status VARCHAR(50),
-  recovery_amount DECIMAL(15, 2),
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX idx_follow_up_notes_loan_id ON follow_up_notes(loan_id);
-CREATE INDEX idx_follow_up_notes_collection_officer_id ON follow_up_notes(collection_officer_id);
-CREATE INDEX idx_follow_up_notes_follow_up_date ON follow_up_notes(follow_up_date);
 
 -- ============================================
 -- SMS NOTIFICATION MANAGEMENT
@@ -408,6 +501,8 @@ CREATE TABLE sms_logs (
   status VARCHAR(50),
   sent_at TIMESTAMP,
   delivery_status VARCHAR(50),
+  failed_reason VARCHAR(500),
+  created_by INTEGER REFERENCES users(id),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -427,8 +522,12 @@ CREATE TABLE activity_logs (
   entity_type VARCHAR(50),
   entity_id INTEGER,
   description TEXT,
+  old_values JSONB,
+  new_values JSONB,
   ip_address VARCHAR(45),
   user_agent TEXT,
+  status VARCHAR(50),
+  error_message VARCHAR(500),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -438,92 +537,32 @@ CREATE INDEX idx_activity_logs_action ON activity_logs(action);
 CREATE INDEX idx_activity_logs_entity ON activity_logs(entity_type, entity_id);
 
 -- ============================================
--- BRANCH FOREIGN KEY (deferred from users)
+-- VIEWS FOR REPORTS
 -- ============================================
 
-ALTER TABLE users ADD CONSTRAINT fk_users_branch_id 
-  FOREIGN KEY (branch_id) REFERENCES branches(id);
+CREATE OR REPLACE VIEW dashboard_metrics AS
+SELECT
+  (SELECT COUNT(*) FROM borrowers WHERE is_active = TRUE) as total_borrowers,
+  (SELECT COUNT(*) FROM loans WHERE status IN ('ACTIVE', 'DISBURSED')) as active_loans,
+  (SELECT COALESCE(SUM(principal_amount), 0) FROM loans WHERE status IN ('ACTIVE', 'DISBURSED')) as total_portfolio,
+  (SELECT COALESCE(SUM(total_overdue_amount), 0) FROM overdue_loans WHERE status = 'ACTIVE') as total_arrears,
+  (SELECT COALESCE(COUNT(*), 0) FROM loans WHERE status = 'DEFAULTED') as defaulted_loans;
+
+CREATE OR REPLACE VIEW outstanding_balances AS
+SELECT
+  l.id,
+  l.borrower_id,
+  l.principal_amount,
+  COALESCE(SUM(r.amount_paid), 0) as total_paid,
+  l.principal_amount - COALESCE(SUM(r.amount_paid), 0) as outstanding_balance
+FROM loans l
+LEFT JOIN repayments r ON l.id = r.loan_id
+WHERE l.status IN ('ACTIVE', 'DISBURSED')
+GROUP BY l.id, l.borrower_id, l.principal_amount;
 
 -- ============================================
--- INSERT DEFAULT ROLES
+-- HELPER FUNCTIONS
 -- ============================================
-
-INSERT INTO roles (name, description) VALUES
-('CEO_ADMIN', 'Chief Executive Officer with full system access'),
-('OPERATIONS_MANAGER', 'Operations Manager with oversight access'),
-('BRANCH_MANAGER', 'Branch Manager with branch-specific access'),
-('LOAN_OFFICER', 'Loan Officer for loan processing'),
-('COLLECTION_OFFICER', 'Collection Officer for collections and follow-ups'),
-('ACCOUNTANT', 'Accountant with financial reporting access')
-ON CONFLICT (name) DO NOTHING;
-
--- ============================================
--- INSERT DEFAULT PERMISSIONS
--- ============================================
-
-INSERT INTO permissions (name, description, module) VALUES
--- User Management
-('CREATE_USER', 'Create new users', 'USER_MANAGEMENT'),
-('VIEW_USERS', 'View user list', 'USER_MANAGEMENT'),
-('EDIT_USER', 'Edit user details', 'USER_MANAGEMENT'),
-('DELETE_USER', 'Delete users', 'USER_MANAGEMENT'),
-('RESET_PASSWORD', 'Reset user passwords', 'USER_MANAGEMENT'),
-
--- Branch Management
-('CREATE_BRANCH', 'Create new branches', 'BRANCH_MANAGEMENT'),
-('VIEW_BRANCHES', 'View branch list', 'BRANCH_MANAGEMENT'),
-('EDIT_BRANCH', 'Edit branch details', 'BRANCH_MANAGEMENT'),
-('VIEW_BRANCH_PERFORMANCE', 'View branch performance metrics', 'BRANCH_MANAGEMENT'),
-
--- Client Management
-('CREATE_CLIENT', 'Register new borrowers', 'CLIENT_MANAGEMENT'),
-('VIEW_CLIENTS', 'View client list', 'CLIENT_MANAGEMENT'),
-('EDIT_CLIENT', 'Edit client details', 'CLIENT_MANAGEMENT'),
-('UPLOAD_CLIENT_DOCUMENTS', 'Upload client documents', 'CLIENT_MANAGEMENT'),
-('VIEW_CLIENT_HISTORY', 'View client loan history', 'CLIENT_MANAGEMENT'),
-
--- Loan Management
-('CREATE_LOAN', 'Create loan applications', 'LOAN_MANAGEMENT'),
-('VIEW_LOANS', 'View loan list', 'LOAN_MANAGEMENT'),
-('APPRAISE_LOAN', 'Appraise loans', 'LOAN_MANAGEMENT'),
-('APPROVE_LOAN', 'Approve loans', 'LOAN_MANAGEMENT'),
-('DISBURSE_LOAN', 'Disburse loans', 'LOAN_MANAGEMENT'),
-('VIEW_LOAN_SCHEDULE', 'View loan repayment schedule', 'LOAN_MANAGEMENT'),
-
--- Repayment Management
-('RECORD_REPAYMENT', 'Record loan repayments', 'REPAYMENT_MANAGEMENT'),
-('VIEW_REPAYMENTS', 'View repayment history', 'REPAYMENT_MANAGEMENT'),
-('GENERATE_RECEIPT', 'Generate repayment receipts', 'REPAYMENT_MANAGEMENT'),
-('VIEW_COLLECTION_SUMMARY', 'View daily collection summary', 'REPAYMENT_MANAGEMENT'),
-
--- Collection Management
-('VIEW_OVERDUE', 'View overdue loans', 'COLLECTION_MANAGEMENT'),
-('RECORD_COLLECTION', 'Record collections', 'COLLECTION_MANAGEMENT'),
-('ADD_FOLLOW_UP_NOTE', 'Add follow-up notes', 'COLLECTION_MANAGEMENT'),
-('VIEW_RECOVERY_STATUS', 'View recovery status', 'COLLECTION_MANAGEMENT'),
-
--- Reports
-('VIEW_REPORTS', 'View reports', 'REPORTS'),
-('GENERATE_PAR_REPORT', 'Generate PAR report', 'REPORTS'),
-('GENERATE_COLLECTION_REPORT', 'Generate collection report', 'REPORTS'),
-('GENERATE_PERFORMANCE_REPORT', 'Generate performance report', 'REPORTS'),
-('VIEW_DASHBOARD', 'View dashboard', 'REPORTS'),
-
--- SMS Management
-('SEND_SMS', 'Send SMS notifications', 'SMS_MANAGEMENT'),
-('SEND_BULK_SMS', 'Send bulk SMS', 'SMS_MANAGEMENT'),
-('VIEW_SMS_LOGS', 'View SMS logs', 'SMS_MANAGEMENT'),
-('CONFIGURE_SMS_PROVIDER', 'Configure SMS provider', 'SMS_MANAGEMENT')
-ON CONFLICT (name) DO NOTHING;
-
--- ============================================
--- ASSIGN PERMISSIONS TO ROLES
--- ============================================
-
--- CEO/Admin gets all permissions
-INSERT INTO role_permissions (role_id, permission_id)
-SELECT r.id, p.id FROM roles r, permissions p WHERE r.name = 'CEO_ADMIN'
-ON CONFLICT (role_id, permission_id) DO NOTHING;
 
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
@@ -533,26 +572,111 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
--- Trigger for users table
+CREATE OR REPLACE FUNCTION calculate_days_in_arrears(p_loan_id INTEGER)
+RETURNS INTEGER AS $$
+BEGIN
+  RETURN COALESCE(
+    (SELECT (CURRENT_DATE - MIN(due_date))::INTEGER
+     FROM loan_schedules
+     WHERE loan_id = p_loan_id
+     AND is_paid = FALSE
+     AND due_date < CURRENT_DATE),
+    0
+  );
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION calculate_outstanding_balance(p_loan_id INTEGER)
+RETURNS DECIMAL AS $$
+BEGIN
+  RETURN COALESCE(
+    (SELECT l.principal_amount - COALESCE(SUM(r.amount_paid), 0)
+     FROM loans l
+     LEFT JOIN repayments r ON l.id = r.loan_id
+     WHERE l.id = p_loan_id
+     GROUP BY l.principal_amount),
+    0
+  );
+END;
+$$ LANGUAGE plpgsql;
+
+-- ============================================
+-- TRIGGERS
+-- ============================================
+
 CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
--- Trigger for branches table
 CREATE TRIGGER update_branches_updated_at BEFORE UPDATE ON branches
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
--- Trigger for borrowers table
 CREATE TRIGGER update_borrowers_updated_at BEFORE UPDATE ON borrowers
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
--- Trigger for loans table
 CREATE TRIGGER update_loans_updated_at BEFORE UPDATE ON loans
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
--- Trigger for repayments table
 CREATE TRIGGER update_repayments_updated_at BEFORE UPDATE ON repayments
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
--- Trigger for collections table
 CREATE TRIGGER update_collections_updated_at BEFORE UPDATE ON collections
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- ============================================
+-- DEFAULT DATA
+-- ============================================
+
+INSERT INTO roles (name, description) VALUES
+('CEO_ADMIN', 'Chief Executive Officer with full system access'),
+('OPERATIONS_MANAGER', 'Operations Manager with oversight access'),
+('BRANCH_MANAGER', 'Branch Manager with branch-specific access'),
+('LOAN_OFFICER', 'Loan Officer for loan processing'),
+('COLLECTION_OFFICER', 'Collection Officer for collections and follow-ups'),
+('ACCOUNTANT', 'Accountant with financial reporting access'),
+('VIEWER', 'Read-only access')
+ON CONFLICT (name) DO NOTHING;
+
+INSERT INTO permissions (name, description, module) VALUES
+('CREATE_USER', 'Create new users', 'USER_MANAGEMENT'),
+('VIEW_USERS', 'View user list', 'USER_MANAGEMENT'),
+('EDIT_USER', 'Edit user details', 'USER_MANAGEMENT'),
+('DELETE_USER', 'Delete users', 'USER_MANAGEMENT'),
+('RESET_PASSWORD', 'Reset user passwords', 'USER_MANAGEMENT'),
+('CREATE_BRANCH', 'Create new branches', 'BRANCH_MANAGEMENT'),
+('VIEW_BRANCHES', 'View branch list', 'BRANCH_MANAGEMENT'),
+('EDIT_BRANCH', 'Edit branch details', 'BRANCH_MANAGEMENT'),
+('VIEW_BRANCH_PERFORMANCE', 'View branch performance metrics', 'BRANCH_MANAGEMENT'),
+('CREATE_CLIENT', 'Register new borrowers', 'CLIENT_MANAGEMENT'),
+('VIEW_CLIENTS', 'View client list', 'CLIENT_MANAGEMENT'),
+('EDIT_CLIENT', 'Edit client details', 'CLIENT_MANAGEMENT'),
+('UPLOAD_CLIENT_DOCUMENTS', 'Upload client documents', 'CLIENT_MANAGEMENT'),
+('VIEW_CLIENT_HISTORY', 'View client loan history', 'CLIENT_MANAGEMENT'),
+('CREATE_LOAN', 'Create loan applications', 'LOAN_MANAGEMENT'),
+('VIEW_LOANS', 'View loan list', 'LOAN_MANAGEMENT'),
+('APPRAISE_LOAN', 'Appraise loans', 'LOAN_MANAGEMENT'),
+('APPROVE_LOAN', 'Approve loans', 'LOAN_MANAGEMENT'),
+('DISBURSE_LOAN', 'Disburse loans', 'LOAN_MANAGEMENT'),
+('VIEW_LOAN_SCHEDULE', 'View loan repayment schedule', 'LOAN_MANAGEMENT'),
+('RECORD_REPAYMENT', 'Record loan repayments', 'REPAYMENT_MANAGEMENT'),
+('VIEW_REPAYMENTS', 'View repayment history', 'REPAYMENT_MANAGEMENT'),
+('GENERATE_RECEIPT', 'Generate repayment receipts', 'REPAYMENT_MANAGEMENT'),
+('VIEW_COLLECTION_SUMMARY', 'View daily collection summary', 'REPAYMENT_MANAGEMENT'),
+('VIEW_OVERDUE', 'View overdue loans', 'COLLECTION_MANAGEMENT'),
+('RECORD_COLLECTION', 'Record collections', 'COLLECTION_MANAGEMENT'),
+('ADD_FOLLOW_UP_NOTE', 'Add follow-up notes', 'COLLECTION_MANAGEMENT'),
+('VIEW_RECOVERY_STATUS', 'View recovery status', 'COLLECTION_MANAGEMENT'),
+('VIEW_REPORTS', 'View reports', 'REPORTS'),
+('GENERATE_PAR_REPORT', 'Generate PAR report', 'REPORTS'),
+('GENERATE_COLLECTION_REPORT', 'Generate collection report', 'REPORTS'),
+('GENERATE_PERFORMANCE_REPORT', 'Generate performance report', 'REPORTS'),
+('VIEW_DASHBOARD', 'View dashboard', 'REPORTS'),
+('SEND_SMS', 'Send SMS notifications', 'SMS_MANAGEMENT'),
+('SEND_BULK_SMS', 'Send bulk SMS', 'SMS_MANAGEMENT'),
+('VIEW_SMS_LOGS', 'View SMS logs', 'SMS_MANAGEMENT'),
+('CONFIGURE_SMS_PROVIDER', 'Configure SMS provider', 'SMS_MANAGEMENT')
+ON CONFLICT (name) DO NOTHING;
+
+-- Assign all permissions to CEO_ADMIN
+INSERT INTO role_permissions (role_id, permission_id)
+SELECT r.id, p.id FROM roles r, permissions p WHERE r.name = 'CEO_ADMIN'
+ON CONFLICT (role_id, permission_id) DO NOTHING;
