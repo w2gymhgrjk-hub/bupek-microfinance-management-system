@@ -1,0 +1,42 @@
+{
+  "name": "bupek-microfinance-management-system",
+  "version": "1.0.0",
+  "description": "Complete microfinance management system for BUPEK FINANCE LIMITED",
+  "main": "index.js",
+  "scripts": {
+    "setup": "npm install && cd backend && npm install && cd ../frontend && npm install && cd ..",
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "build": "npm run build:backend && npm run build:frontend",
+    "build:backend": "cd backend && npm run build",
+    "build:frontend": "cd frontend && npm run build",
+    "start": "concurrently \"npm run start:backend\" \"npm run start:frontend\"",
+    "start:backend": "cd backend && npm start",
+    "start:frontend": "cd frontend && npm start",
+    "test": "npm run test:backend && npm run test:frontend",
+    "test:backend": "cd backend && npm test",
+    "test:frontend": "cd frontend && npm test",
+    "db:setup": "psql -U postgres -f database/schema.sql",
+    "db:migrate": "cd backend && npm run migrate",
+    "db:seed": "cd backend && npm run seed",
+    "docker:build": "docker-compose build",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "lint": "npm run lint:backend && npm run lint:frontend",
+    "lint:backend": "cd backend && npm run lint",
+    "lint:frontend": "cd frontend && npm run lint"
+  },
+  "keywords": [
+    "microfinance",
+    "loan",
+    "management",
+    "system",
+    "bupek"
+  ],
+  "author": "BUPEK FINANCE LIMITED",
+  "license": "PROPRIETARY",
+  "devDependencies": {
+    "concurrently": "^8.2.0"
+  }
+}
