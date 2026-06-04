@@ -1,0 +1,26 @@
+/**
+ * Root layout component
+ */
+
+import type { Metadata } from 'next';
+import { Inter } from 'next/font/google';
+import '@/styles/globals.css';
+import { Toaster } from 'react-hot-toast';
+
+const inter = Inter({ subsets: ['latin'] });
+
+export const metadata: Metadata = {
+  title: 'BUPEK Microfinance Management System',
+  description: 'Complete microfinance management system for BUPEK FINANCE LIMITED',
+};
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en">
+      <body className={inter.className}>
+        {children}
+        <Toaster position="top-right" />
+      </body>
+    </html>
+  );
+}
