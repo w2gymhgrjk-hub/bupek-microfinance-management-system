@@ -1,55 +1,45 @@
-/**
- * Global error handling middleware
- */
-
 import { Request, Response, NextFunction } from 'express';
-import logger from '../config/logger';
-import { sendError } from '../utils/responses';
+import { ErrorMessages, HTTP_STATUS } from '../constants/errors';
 
-interface CustomError extends Error {
+interface ApiError extends Error {
   statusCode?: number;
+  isOperational?: boolean;
 }
 
-/**
- * Global error handler middleware
- */
-export const errorHandler = (err: CustomError, req: Request, res: Response, next: NextFunction) => {
-  const statusCode = err.statusCode || 500;
-  const message = err.message || 'Internal server error';
+export const errorHandler = (err: ApiError, req: Request, res: Response, next: NextFunction) => {
+  const statusCode = err.statusCode || HTTP_STATUS.INTERNAL_SERVER_ERROR;
+  const message = err.message || ErrorMessages.INTERNAL_SERVER_ERROR;
 
-  logger.error('[Error] Unhandled error', {
+  console.error(`[${new Date().toISOString()}] Error:`, {
     statusCode,
     message,
     stack: err.stack,
     path: req.path,
     method: req.method,
-    ip: req.ip,
   });
 
-  // Don't expose error details in production
-  const errorMessage = process.env.NODE_ENV === 'production' ? 'Internal server error' : message;
-
-  return sendError(res, statusCode, errorMessage);
-};
-
-/**
- * 404 Not Found handler
- */
-export const notFoundHandler = (req: Request, res: Response) => {
-  logger.warn('[404] Not found', {
-    path: req.path,
-    method: req.method,
-    ip: req.ip,
+  res.status(statusCode).json({
+    success: false,
+    statusCode,
+    message,
+    ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
   });
-
-  return sendError(res, 404, 'Not found', `Route ${req.path} not found`);
 };
 
-/**
- * Async error wrapper to catch Promise rejections
- */
 export const asyncHandler = (fn: Function) => {
   return (req: Request, res: Response, next: NextFunction) => {
     Promise.resolve(fn(req, res, next)).catch(next);
   };
 };
+
+export class AppError extends Error implements ApiError {
+  statusCode: number;
+  isOperational: boolean;
+
+  constructor(message: string, statusCode: number) {
+    super(message);
+    this.statusCode = statusCode;
+    this.isOperational = true;
+    Error.captureStackTrace(this, this.constructor);
+  }
+}

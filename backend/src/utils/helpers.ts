@@ -1,101 +1,105 @@
-/**
- * Helper utility functions
- */
+import crypto from 'crypto';
+import { v4 as uuidv4 } from 'uuid';
 
-import bcrypt from 'bcryptjs';
-
-/**
- * Hash a password
- */
-export const hashPassword = async (password: string): Promise<string> => {
-  const salt = await bcrypt.genSalt(10);
-  return bcrypt.hash(password, salt);
+export const generateUniqueReference = (prefix: string = ''): string => {
+  const timestamp = Date.now().toString(36);
+  const randomStr = Math.random().toString(36).substr(2, 5);
+  return `${prefix}${timestamp}${randomStr}`.toUpperCase();
 };
 
-/**
- * Compare password with hash
- */
-export const comparePassword = async (password: string, hash: string): Promise<boolean> => {
-  return bcrypt.compare(password, hash);
-};
-
-/**
- * Generate unique loan number
- */
 export const generateLoanNumber = (): string => {
-  const timestamp = Date.now().toString(36).toUpperCase();
-  const random = Math.random().toString(36).substring(2, 8).toUpperCase();
-  return `LOAN-${timestamp}-${random}`;
+  return generateUniqueReference('LN');
 };
 
-/**
- * Generate unique repayment number
- */
 export const generateRepaymentNumber = (): string => {
-  const timestamp = Date.now().toString(36).toUpperCase();
-  const random = Math.random().toString(36).substring(2, 6).toUpperCase();
-  return `REP-${timestamp}-${random}`;
+  return generateUniqueReference('RP');
 };
 
-/**
- * Generate unique branch code
- */
-export const generateBranchCode = (): string => {
-  const random = Math.random().toString(36).substring(2, 7).toUpperCase();
-  return `BR-${random}`;
+export const generateReceiptNumber = (): string => {
+  return generateUniqueReference('RC');
 };
 
-/**
- * Format currency
- */
-export const formatCurrency = (amount: number, currency: string = 'TZS'): string => {
-  return `${currency} ${amount.toFixed(2)}`;
+export const formatCurrency = (amount: number): string => {
+  return new Intl.NumberFormat('en-UG', {
+    style: 'currency',
+    currency: 'UGX',
+  }).format(amount);
 };
 
-/**
- * Calculate days between two dates
- */
-export const daysBetween = (date1: Date, date2: Date): number => {
-  const oneDay = 24 * 60 * 60 * 1000;
-  return Math.round(Math.abs((date1.getTime() - date2.getTime()) / oneDay));
+export const calculateDaysOverdue = (dueDate: Date): number => {
+  const today = new Date();
+  const diffTime = today.getTime() - new Date(dueDate).getTime();
+  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  return diffDays > 0 ? diffDays : 0;
 };
 
-/**
- * Check if email is valid
- */
-export const isValidEmail = (email: string): boolean => {
+export const calculateLoanSchedule = (
+  principal: number,
+  annualRate: number,
+  months: number
+): Array<{
+  schedule_number: number;
+  principal_amount: number;
+  interest_amount: number;
+  total_amount: number;
+  due_date: Date;
+}> => {
+  const monthlyRate = annualRate / 100 / 12;
+  const monthlyPayment =
+    (principal * monthlyRate * Math.pow(1 + monthlyRate, months)) /
+    (Math.pow(1 + monthlyRate, months) - 1);
+
+  const schedule = [];
+  let remainingBalance = principal;
+  const today = new Date();
+
+  for (let i = 1; i <= months; i++) {
+    const interestAmount = remainingBalance * monthlyRate;
+    const principalAmount = monthlyPayment - interestAmount;
+    remainingBalance -= principalAmount;
+
+    const dueDate = new Date(today);
+    dueDate.setMonth(dueDate.getMonth() + i);
+
+    schedule.push({
+      schedule_number: i,
+      principal_amount: Math.round(principalAmount * 100) / 100,
+      interest_amount: Math.round(interestAmount * 100) / 100,
+      total_amount: Math.round(monthlyPayment * 100) / 100,
+      due_date: dueDate,
+    });
+  }
+
+  return schedule;
+};
+
+export const calculateInterest = (
+  principal: number,
+  annualRate: number,
+  months: number
+): number => {
+  const monthlyRate = annualRate / 100 / 12;
+  const monthlyPayment =
+    (principal * monthlyRate * Math.pow(1 + monthlyRate, months)) /
+    (Math.pow(1 + monthlyRate, months) - 1);
+  const totalPayment = monthlyPayment * months;
+  return Math.round((totalPayment - principal) * 100) / 100;
+};
+
+export const calculatePAR = (
+  totalPortfolio: number,
+  arrearsAmount: number
+): number => {
+  if (totalPortfolio === 0) return 0;
+  return Math.round((arrearsAmount / totalPortfolio) * 100 * 100) / 100;
+};
+
+export const validateEmail = (email: string): boolean => {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   return emailRegex.test(email);
 };
 
-/**
- * Check if phone is valid (Tanzania format)
- */
-export const isValidPhone = (phone: string): boolean => {
-  const phoneRegex = /^\+?255\d{9}$|^0\d{9}$/;
-  return phoneRegex.test(phone);
-};
-
-/**
- * Sanitize user input
- */
-export const sanitizeInput = (input: string): string => {
-  return input.trim().replace(/[<>]/g, '');
-};
-
-/**
- * Paginate array
- */
-export const paginate = <T>(array: T[], page: number, limit: number) => {
-  const start = (page - 1) * limit;
-  const end = start + limit;
-  return {
-    data: array.slice(start, end),
-    pagination: {
-      page,
-      limit,
-      total: array.length,
-      pages: Math.ceil(array.length / limit),
-    },
-  };
+export const validatePhone = (phone: string): boolean => {
+  const phoneRegex = /^[\d\s+()-]+$/;
+  return phoneRegex.test(phone) && phone.length >= 10;
 };
