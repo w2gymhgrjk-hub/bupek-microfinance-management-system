@@ -1,48 +1,49 @@
-/**
- * Logger configuration using Winston
- */
-
 import winston from 'winston';
-import fs from 'fs';
-import path from 'path';
+import dotenv from 'dotenv';
 
-const logsDir = process.env.LOG_FILE ? path.dirname(process.env.LOG_FILE) : './logs';
+dotenv.config();
 
-// Create logs directory if it doesn't exist
-if (!fs.existsSync(logsDir)) {
-  fs.mkdirSync(logsDir, { recursive: true });
-}
+const levels = {
+  error: 0,
+  warn: 1,
+  info: 2,
+  http: 3,
+  debug: 4,
+};
+
+const colors = {
+  error: 'red',
+  warn: 'yellow',
+  info: 'green',
+  http: 'magenta',
+  debug: 'white',
+};
+
+winston.addColors(colors);
+
+const format = winston.format.combine(
+  winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss:ms' }),
+  winston.format.printf(
+    (info) => `${info.timestamp} ${info.level}: ${info.message}`,
+  ),
+);
+
+const transports = [
+  new winston.transports.Console(),
+  new winston.transports.File({
+    filename: 'logs/error.log',
+    level: 'error',
+  }),
+  new winston.transports.File({
+    filename: 'logs/all.log',
+  }),
+];
 
 const logger = winston.createLogger({
-  level: process.env.LOG_LEVEL || 'info',
-  format: winston.format.combine(
-    winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-    winston.format.errors({ stack: true }),
-    winston.format.json()
-  ),
-  defaultMeta: { service: 'bupek-backend' },
-  transports: [
-    new winston.transports.Console({
-      format: winston.format.combine(
-        winston.format.colorize(),
-        winston.format.printf(({ level, message, timestamp, ...meta }) => {
-          const metaStr = Object.keys(meta).length ? JSON.stringify(meta) : '';
-          return `${timestamp} [${level}]: ${message} ${metaStr}`;
-        })
-      ),
-    }),
-    new winston.transports.File({
-      filename: process.env.LOG_FILE || path.join(logsDir, 'app.log'),
-      maxsize: 5242880, // 5MB
-      maxFiles: 5,
-    }),
-    new winston.transports.File({
-      filename: path.join(logsDir, 'error.log'),
-      level: 'error',
-      maxsize: 5242880, // 5MB
-      maxFiles: 5,
-    }),
-  ],
+  level: process.env.LOG_LEVEL || 'debug',
+  levels,
+  format,
+  transports,
 });
 
 export default logger;

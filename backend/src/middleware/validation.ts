@@ -1,25 +1,17 @@
 import { Request, Response, NextFunction } from 'express';
-import Joi from 'joi';
-import { HTTP_STATUS } from '../constants/errors';
+import { Schema } from 'joi';
+import { ValidationError } from '../utils/errors';
 
-export const validateRequest = (schema: Joi.ObjectSchema) => {
+export const validateRequest = (schema: Schema) => {
   return (req: Request, res: Response, next: NextFunction) => {
-    const { error, value } = schema.validate(
-      { ...req.body, ...req.params, ...req.query },
-      { abortEarly: false }
-    );
+    const { error, value } = schema.validate(req.body, {
+      abortEarly: false,
+      stripUnknown: true,
+    });
 
     if (error) {
-      const errorMessages = error.details.map((detail) => ({
-        field: detail.path.join('.'),
-        message: detail.message,
-      }));
-
-      return res.status(HTTP_STATUS.BAD_REQUEST).json({
-        success: false,
-        message: 'Validation failed',
-        errors: errorMessages,
-      });
+      const messages = error.details.map((d) => d.message).join(', ');
+      throw new ValidationError(messages);
     }
 
     req.body = value;

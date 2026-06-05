@@ -1,55 +1,69 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { jwtConfig } from '../config/jwt';
-import { ErrorMessages, HTTP_STATUS } from '../constants/errors';
+import { JWT_SECRET } from '../config/jwt';
+import { AuthenticationError, AuthorizationError } from '../utils/errors';
+import { TokenPayload } from '../types';
 
 declare global {
   namespace Express {
     interface Request {
-      user?: any;
+      user?: TokenPayload;
+      token?: string;
     }
   }
 }
 
-export const authenticateToken = (req: Request, res: Response, next: NextFunction) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
+export const optionalAuth = (req: Request, res: Response, next: NextFunction) => {
+  const token = req.headers.authorization?.split(' ')[1];
+
+  if (token) {
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET) as TokenPayload;
+      req.user = decoded;
+      req.token = token;
+    } catch (error) {
+      console.log('Optional auth token invalid:', error);
+    }
+  }
+
+  next();
+};
+
+export const requireAuth = (req: Request, res: Response, next: NextFunction) => {
+  const token = req.headers.authorization?.split(' ')[1];
 
   if (!token) {
-    return res.status(HTTP_STATUS.UNAUTHORIZED).json({
-      success: false,
-      message: ErrorMessages.UNAUTHORIZED,
-    });
+    throw new AuthenticationError('No token provided');
   }
 
   try {
-    const decoded = jwt.verify(token, jwtConfig.secret);
+    const decoded = jwt.verify(token, JWT_SECRET) as TokenPayload;
     req.user = decoded;
+    req.token = token;
     next();
-  } catch (error: any) {
-    if (error.name === 'TokenExpiredError') {
-      return res.status(HTTP_STATUS.UNAUTHORIZED).json({
-        success: false,
-        message: ErrorMessages.TOKEN_EXPIRED,
-      });
-    }
-    return res.status(HTTP_STATUS.UNAUTHORIZED).json({
-      success: false,
-      message: ErrorMessages.INVALID_TOKEN,
-    });
+  } catch (error) {
+    throw new AuthenticationError('Invalid or expired token');
   }
 };
 
-export const authorize = (requiredRoles: string[]) => {
+export const requireRole = (...roles: string[]) => {
   return (req: Request, res: Response, next: NextFunction) => {
     if (!req.user) {
-      return res.status(HTTP_STATUS.UNAUTHORIZED).json({
-        success: false,
-        message: ErrorMessages.UNAUTHORIZED,
-      });
+      throw new AuthenticationError('Not authenticated');
     }
 
-    // Role check would be implemented with role lookup
+    if (!roles.includes(req.user.role)) {
+      throw new AuthorizationError('Insufficient permissions');
+    }
+
     next();
   };
+};
+
+export const generateToken = (payload: TokenPayload, expiresIn: string = '7d'): string => {
+  return jwt.sign(payload, JWT_SECRET, { expiresIn });
+};
+
+export const verifyToken = (token: string): TokenPayload => {
+  return jwt.verify(token, JWT_SECRET) as TokenPayload;
 };

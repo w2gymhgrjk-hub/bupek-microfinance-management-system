@@ -1,45 +1,31 @@
 import { Request, Response, NextFunction } from 'express';
-import { ErrorMessages, HTTP_STATUS } from '../constants/errors';
+import { AppError } from '../utils/errors';
+import logger from '../config/logger';
 
-interface ApiError extends Error {
-  statusCode?: number;
-  isOperational?: boolean;
-}
+export const errorHandler = (err: Error, req: Request, res: Response, next: NextFunction) => {
+  const statusCode = err instanceof AppError ? err.statusCode : 500;
+  const message = err.message || 'Internal Server Error';
 
-export const errorHandler = (err: ApiError, req: Request, res: Response, next: NextFunction) => {
-  const statusCode = err.statusCode || HTTP_STATUS.INTERNAL_SERVER_ERROR;
-  const message = err.message || ErrorMessages.INTERNAL_SERVER_ERROR;
-
-  console.error(`[${new Date().toISOString()}] Error:`, {
-    statusCode,
-    message,
-    stack: err.stack,
-    path: req.path,
-    method: req.method,
-  });
+  logger.error(`[ERROR] ${statusCode} - ${message}`);
 
   res.status(statusCode).json({
     success: false,
-    statusCode,
     message,
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
+    error: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+    statusCode,
   });
 };
 
-export const asyncHandler = (fn: Function) => {
-  return (req: Request, res: Response, next: NextFunction) => {
-    Promise.resolve(fn(req, res, next)).catch(next);
-  };
+export const notFoundHandler = (req: Request, res: Response) => {
+  res.status(404).json({
+    success: false,
+    message: `Route ${req.originalUrl} not found`,
+    statusCode: 404,
+  });
 };
 
-export class AppError extends Error implements ApiError {
-  statusCode: number;
-  isOperational: boolean;
-
-  constructor(message: string, statusCode: number) {
-    super(message);
-    this.statusCode = statusCode;
-    this.isOperational = true;
-    Error.captureStackTrace(this, this.constructor);
-  }
-}
+export const asyncHandler =
+  (fn: (req: Request, res: Response, next: NextFunction) => Promise<any>) =>
+  (req: Request, res: Response, next: NextFunction) => {
+    Promise.resolve(fn(req, res, next)).catch(next);
+  };
